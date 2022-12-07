@@ -1,0 +1,85 @@
+function [Tout renorm]=GenerateTransmissionMatrixObjectFrame(filename,Centx,Centy,CircFilt,FilterHolo)
+
+
+
+holoinfo=h5info(filename,'/Epi/Hologram');
+count=holoinfo.ChunkSize;
+Epiinfo=h5info(filename,'/Epi');
+datainfo=Epiinfo.Datasets.Dataspace;
+datasize=datainfo.Size;
+rootinfo=h5info(filename);
+disp(rootinfo.Attributes.Value)   % display data comments
+
+            
+ps=0.5576;                        % pixel size from callibration image
+Fs=1/ps;
+
+Nx=datasize(2);
+Ny=datasize(1);  
+x=ps*[-Nx/2:Nx/2-1];
+y=ps*[-Ny/2:Ny/2-1];
+dFx=Fs/Nx;
+dfxs         = dFx;%1/(N*ps);             % Fourier spacing 
+fxs          = dfxs*[-Nx/2:Nx/2-1];         % 1D axis in fx
+dFy=Fs/Ny;
+dfys         = dFy;%1/(N*ps);             % Fourier spacing 
+fys          = dfys*[-Ny/2:Ny/2-1];         % 1D axis in fy
+[Xs Ys]=meshgrid(x,y);
+[fxxs fyys]=meshgrid(fxs,fys);
+
+SPX=h5readatt(filename,'/Epi','scanPathX');
+SPY=h5readatt(filename,'/Epi','scanPathY');
+scanAmplitudeX = 0.22;          % peak-to-peak voltage, in Volts
+scanAmplitudeY = scanAmplitudeX / 1.333;    % scaled by magnification  
+
+NA=.16;
+lambda=1.030/2;
+
+Fpupx=linspace(-NA/lambda,NA/lambda,length(SPX))*((SPX(end)-SPX(1))/2)/scanAmplitudeX;
+Fpupy=linspace(-NA/lambda,NA/lambda,length(SPY))*((SPY(end)-SPY(1))/2)/scanAmplitudeY;
+
+
+
+upd = textprogressbar(datasize(3), 'barlength', 20, ...
+                         'updatestep', 1, ...
+                         'startmsg', 'Reconstructing Fields... ',...
+                         'endmsg', ' Finally!', ...
+                         'showbar', true, ...
+                         'showremtime', true, ...
+                         'showactualnum', true, ...
+                         'barsymbol', '+', ...
+                         'emptybarsymbol', '-');
+
+
+
+
+renorm=zeros(size(CircFilt));
+Tout=zeros(datasize(1)*datasize(2),datasize(3));
+for ii=1:datasize(3)
+start=[1 1 ii];
+ACHolo=h5read(filename,'/Epi/Hologram',start,count)-h5read(filename,'/Epi/Reference',start,count)-h5read(filename,'/Epi/Signal',start,count);
+    ACHolo=ACHolo.*(FilterHolo);
+    fftholo=(fftshift(fft2((ACHolo)))).*CircFilt; % apply filter
+    % Appy phase ramp to shift to center
+    field=ifft2(ifftshift(fftholo)).*exp(1i*2*pi*((Centx)*dfxs*Xs+Centy*dfys*Ys));
+    %shift to object coordinates
+    [row,col] = ind2sub([size(SPX) size(SPY)],ii);
+    phsrmp=exp(1i*2*pi*(Fpupx(col).*Xs-Fpupy(row).*Ys));                
+    field=field.*phsrmp;
+    fieldk=fftshift(fft2(field));
+    Tout(:,ii)=fieldk(:);
+
+    CircFilt2=(fxxs-Fpupx(col)).^2+(fyys+Fpupy(row)).^2<=(NA/lambda)^2;
+
+    renorm=renorm+CircFilt2;
+
+
+    upd(ii);
+%     imagesc(abs(fftshift(fft2(field))))
+%     drawnow;
+
+
+end
+
+
+disp('done!!!')
